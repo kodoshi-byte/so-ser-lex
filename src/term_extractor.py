@@ -2,10 +2,11 @@
 Text Processor and Term Extractor for Social Services Legislation
 
 Analyzes text from legislation sources and:
-1. Extracts unique terms and phrases
-2. Counts frequency
+1. Extracts ALL unique terms and phrases
+2. Counts frequency for each term
 3. Identifies key vocabulary
 4. Filters stopwords
+5. Exports complete list to CSV
 """
 
 import os
@@ -14,6 +15,7 @@ from pathlib import Path
 from collections import Counter
 import re
 import sys
+import csv
 from typing import Dict, List, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -88,45 +90,40 @@ class TermExtractor:
         
         return filtered
     
-    def extract_phrases(self, text, n_grams=(1, 2, 3)):
+    def extract_all_terms(self, text):
         """
-        Extracts single words and multi-word phrases
+        Extracts ALL unique single words (unigrams) with frequencies
         
         Args:
             text (str): Text to analyze
-            n_grams: Tuple of n-gram sizes to extract
             
         Returns:
-            dict: Dictionary with counts for each n-gram size
+            dict: ALL unique words with counts (sorted by frequency)
         """
         tokens = self.tokenize_and_clean(text)
         
-        result = {}
+        # Count ALL occurrences
+        counter = Counter(tokens)
         
-        for n in n_grams:
-            ngrams = []
-            for i in range(len(tokens) - n + 1):
-                phrase = ' '.join(tokens[i:i+n])
-                ngrams.append(phrase)
-            
-            # Count occurrences, filter by minimum frequency
-            counter = Counter(ngrams)
-            filtered = {term: count for term, count in counter.items() 
-                       if count >= MIN_FREQUENCY}
-            
-            result[f'{n}_gram'] = filtered
+        # Filter by minimum frequency (default MIN_FREQUENCY = 2)
+        # This keeps words that appear at least twice
+        filtered = {term: count for term, count in counter.items() 
+                   if count >= MIN_FREQUENCY}
         
-        return result
+        # Sort by frequency (highest first)
+        sorted_terms = sorted(filtered.items(), key=lambda x: x[1], reverse=True)
+        
+        return sorted_terms
     
     def analyze_source(self, source_name):
         """
-        Analyzes all text from a single source
+        Analyzes all text from a single source and extracts ALL terms
         
         Args:
             source_name (str): 'lagen_nu', 'lagar_se', or 'infolex'
             
         Returns:
-            dict: Analysis results
+            dict: Analysis results with ALL terms
         """
         logger.info(f"\n{'='*70}")
         logger.info(f"ANALYZING SOURCE: {source_name}")
@@ -148,43 +145,33 @@ class TermExtractor:
         
         logger.info(f"Loaded {len(full_text):,} characters")
         
-        # Extract phrases
-        logger.info("Extracting phrases...")
-        phrases = self.extract_phrases(full_text)
+        # Extract ALL terms
+        logger.info("Extracting ALL terms from text...")
+        all_terms = self.extract_all_terms(full_text)
         
-        # Get top terms for each n-gram
+        logger.info(f"\n✓ Found {len(all_terms)} unique terms")
+        logger.info(f"✓ Showing top 20:")
+        for i, (term, freq) in enumerate(all_terms[:20], 1):
+            logger.info(f"   {i:2d}. {freq:4d}x  {term}")
+        
         results = {
             'source': source_name,
             'total_chars': len(full_text),
-            'unique_terms': {}
+            'all_terms': all_terms,
+            'total_unique_terms': len(all_terms)
         }
-        
-        for gram_type, terms_dict in phrases.items():
-            n = int(gram_type.split('_')[0])
-            sorted_terms = sorted(terms_dict.items(), key=lambda x: x[1], reverse=True)
-            
-            results['unique_terms'][gram_type] = {
-                'count': len(sorted_terms),
-                'top_30': sorted_terms[:30]
-            }
-            
-            logger.info(f"\n{gram_type.upper()}")
-            logger.info(f"  Total unique: {len(sorted_terms)}")
-            logger.info(f"  Top 10:")
-            for term, freq in sorted_terms[:10]:
-                logger.info(f"    {freq:4d}x  {term}")
         
         return results
     
     def analyze_all_sources(self):
         """
-        Analyzes all available sources
+        Analyzes all available sources and extracts ALL terms
         
         Returns:
-            dict: Analysis results for all sources
+            list: Analysis results for all sources
         """
         logger.info("\n" + "=" * 70)
-        logger.info("TERM EXTRACTION AND ANALYSIS")
+        logger.info("TERM EXTRACTION AND ANALYSIS - ALL TERMS")
         logger.info("=" * 70)
         
         all_results = []
@@ -202,52 +189,123 @@ class TermExtractor:
         
         return all_results
     
-    def export_terms_to_csv(self, results, filename="terms_extracted.csv"):
+    def export_all_terms_to_csv(self, results, filename="all_terms_complete.csv"):
         """
-        Exports extracted terms to CSV for manual review
+        Exports ALL extracted terms to CSV (sorted by frequency)
+        
+        Args:
+            results: Analysis results from all sources
+            filename: Output filename
+            
+        Returns:
+            Path to exported file
+        """
+        output_path = self.output_dir / filename
+        
+        # Collect all terms from all sources with metadata
+        all_rows = []
+        
+        for result in results:
+            source = result['source']
+            
+            # Get all terms (not just top 20!)
+            for term, freq in result['all_terms']:
+                all_rows.append({
+                    'source': source,
+                    'term': term,
+                    'frequency': freq,
+                    'english': '',
+                    'italian': '',
+                    'etymology': '',
+                    'category': '',
+                    'notes': '',
+                    'status': 'uncurated'
+                })
+        
+        # Sort all rows by frequency (highest first)
+        all_rows.sort(key=lambda x: x['frequency'], reverse=True)
+        
+        # Write to CSV
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                'source', 'term', 'frequency', 'english', 'italian', 
+                'etymology', 'category', 'notes', 'status'
+            ])
+            writer.writeheader()
+            writer.writerows(all_rows)
+        
+        logger.info(f"\n✓ Exported {len(all_rows)} terms to: {output_path}")
+        return output_path, len(all_rows)
+    
+    def create_statistics_report(self, results, filename="analysis_statistics.txt"):
+        """
+        Creates a detailed statistics report
         
         Args:
             results: Analysis results
             filename: Output filename
         """
-        import csv
-        
         output_path = self.output_dir / filename
         
-        rows = []
-        for result in results:
-            source = result['source']
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write("=" * 70 + "\n")
+            f.write("SOCIAL SERVICES LEGISLATION - TERM ANALYSIS REPORT\n")
+            f.write("=" * 70 + "\n\n")
             
-            # Add unigrams (single words)
-            if '1_gram' in result['unique_terms']:
-                for term, freq in result['unique_terms']['1_gram']['top_30']:
-                    rows.append({
-                        'source': source,
-                        'term': term,
-                        'frequency': freq,
-                        'type': 'word',
-                        'english': '',
-                        'italian': '',
-                        'etymology': '',
-                        'category': '',
-                        'notes': '',
-                        'status': 'uncurated'
-                    })
+            total_unique = 0
+            total_occurrences = 0
+            
+            for result in results:
+                source = result['source']
+                source_display = {
+                    'lagen_nu': 'Lagen.nu (Consolidated Law)',
+                    'lagar_se': 'Lagar.se (Legislative DB)',
+                    'infolex': 'Infolex.se (Expert Commentary)'
+                }.get(source, source)
+                
+                unique_count = result['total_unique_terms']
+                total_chars = result['total_chars']
+                
+                # Count total occurrences
+                occurrences = sum(freq for _, freq in result['all_terms'])
+                
+                total_unique += unique_count
+                total_occurrences += occurrences
+                
+                f.write(f"\n{'='*70}\n")
+                f.write(f"{source_display}\n")
+                f.write(f"{'='*70}\n")
+                f.write(f"Characters analyzed: {total_chars:,}\n")
+                f.write(f"Unique terms found: {unique_count}\n")
+                f.write(f"Total term occurrences: {occurrences:,}\n")
+                f.write(f"Average frequency: {occurrences/unique_count:.1f}x per term\n")
+                
+                f.write(f"\nTop 30 Most Frequent Terms:\n")
+                f.write(f"{'-'*70}\n")
+                f.write(f"{'Rank':<5} {'Frequency':<12} {'Term':<50}\n")
+                f.write(f"{'-'*70}\n")
+                
+                for rank, (term, freq) in enumerate(result['all_terms'][:30], 1):
+                    f.write(f"{rank:<5} {freq:<12} {term}\n")
+            
+            f.write(f"\n\n{'='*70}\n")
+            f.write("OVERALL STATISTICS\n")
+            f.write(f"{'='*70}\n")
+            f.write(f"Sources analyzed: {len(results)}\n")
+            f.write(f"Total unique terms (all sources): {total_unique}\n")
+            f.write(f"Total term occurrences: {total_occurrences:,}\n")
+            f.write(f"Average frequency across all: {total_occurrences/total_unique:.1f}x\n")
+            
+            f.write(f"\n\nFILES GENERATED:\n")
+            f.write(f"  1. all_terms_complete.csv - All {total_unique} terms with metadata\n")
+            f.write(f"  2. analysis_statistics.txt - This report\n")
+            f.write(f"\nOPEN: all_terms_complete.csv in Excel or Google Sheets to review!\n")
         
-        with open(output_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=[
-                'source', 'term', 'frequency', 'type', 'english', 'italian', 
-                'etymology', 'category', 'notes', 'status'
-            ])
-            writer.writeheader()
-            writer.writerows(rows)
-        
-        logger.info(f"\n✓ Exported {len(rows)} terms to: {output_path}")
-        return output_path
+        logger.info(f"✓ Statistics report saved to: {output_path}")
 
 
 def main():
-    """Main function to extract and analyze terms"""
+    """Main function to extract and analyze ALL terms"""
     
     extractor = TermExtractor()
     results = extractor.analyze_all_sources()
@@ -257,18 +315,26 @@ def main():
         logger.info("✅ ANALYSIS COMPLETE!")
         logger.info("=" * 70)
         
-        # Export to CSV
-        extractor.export_terms_to_csv(results)
+        # Export ALL terms to CSV
+        csv_path, term_count = extractor.export_all_terms_to_csv(results)
         
-        logger.info(f"\n📊 Sources analyzed: {len(results)}")
-        logger.info(f"📁 Output directory: {extractor.output_dir}")
+        # Create statistics report
+        extractor.create_statistics_report(results)
         
-        logger.info("\n🎯 Next steps:")
-        logger.info("   1. Review extracted terms in CSV file")
-        logger.info("   2. Mark which terms are important for your vocabulary")
-        logger.info("   3. Look up grammar on svenska.se")
-        logger.info("   4. Find etymologies (Latin/Greek roots)")
-        logger.info("   5. Add translations (English/Italian)")
+        logger.info(f"\n📊 Summary:")
+        logger.info(f"   Total terms extracted: {term_count}")
+        logger.info(f"   CSV file: {csv_path.name}")
+        
+        logger.info(f"\n📁 Output directory: {extractor.output_dir}")
+        
+        logger.info(f"\n🎯 NEXT STEPS:")
+        logger.info(f"   1. Download and open: all_terms_complete.csv")
+        logger.info(f"   2. Use Excel/Google Sheets to review ALL {term_count} terms")
+        logger.info(f"   3. Add English translations for each term")
+        logger.info(f"   4. Add Italian translations")
+        logger.info(f"   5. Categorize by type (child welfare, abuse, etc.)")
+        logger.info(f"   6. Mark status: keep/discard/uncertain")
+        logger.info(f"\n   The 'frequency' column shows how important each term is!")
     else:
         logger.error("No results to process")
 
